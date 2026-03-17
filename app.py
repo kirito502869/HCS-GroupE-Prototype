@@ -65,11 +65,11 @@ def ensure_headers():
         if not headers:
             sheet.append_row(REQUIRED_HEADERS)
     except Exception:
-        # 避免 Google Sheets 临时错误让整个 app 直接崩掉
+
         pass
 
 
-# 每个会话只检查一次表头，避免每次 rerun 都请求 Google API
+
 if "headers_checked" not in st.session_state:
     ensure_headers()
     st.session_state.headers_checked = True

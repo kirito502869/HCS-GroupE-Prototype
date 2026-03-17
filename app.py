@@ -203,6 +203,36 @@ def get_created_record(user_id: str, pw_type: str):
 
     return filtered.iloc[-1]
 
+
+def get_created_types_for_user(user_id: str):
+    records = get_all_records_safe()
+    if not records:
+        return set()
+
+    logs = pd.DataFrame(records)
+    if logs.empty:
+        return set()
+
+    required_cols = {"user_id", "type", "event"}
+    if not required_cols.issubset(set(logs.columns)):
+        return set()
+
+    filtered = logs[
+        (logs["user_id"].astype(str) == str(user_id))
+        & (logs["event"] == "created")
+    ]
+
+    if filtered.empty:
+        return set()
+
+    return set(filtered["type"].dropna().astype(str).tolist())
+
+
+def get_missing_types_for_user(user_id: str, cat_code: str):
+    required_types = set(CATEGORY_MAP[cat_code]["types"])
+    created_types = get_created_types_for_user(user_id)
+    return sorted(list(required_types - created_types))
+
 # =========================================================
 # STATE
 # =========================================================
@@ -275,7 +305,7 @@ allowed_pw_types = category_info["types"]
 
 st.info(f"You are in Category {cat_code}: {category_info['label']}")
 
-# mode switch BEFORE widget render
+# safe mode switch BEFORE widget render
 if st.session_state.pending_mode_switch:
     st.session_state.mode = st.session_state.pending_mode_switch
     st.session_state.pending_mode_switch = ""
@@ -310,18 +340,15 @@ if mode == "Create Password":
 
     pw_type = st.selectbox("Password Type", allowed_pw_types, key="pw_type_create")
 
-    # Type switch
     if pw_type != st.session_state.last_create_pw_type:
         st.session_state.create_password = ""
         st.session_state.create_widget_version += 1
         st.session_state.last_create_pw_type = pw_type
         st.session_state.creation_start_time = None
 
-    # Timer
     if st.session_state.creation_start_time is None:
         st.session_state.creation_start_time = time.time()
 
-    # Pending clear
     if st.session_state.create_pending_clear:
         st.session_state.create_password = ""
         st.session_state.create_widget_version += 1
@@ -330,6 +357,13 @@ if mode == "Create Password":
     if st.session_state.create_notice:
         st.success(st.session_state.create_notice)
         st.session_state.create_notice = ""
+
+    created_types = get_created_types_for_user(user_id)
+    required_types = CATEGORY_MAP[cat_code]["types"]
+    completed_display = ", ".join([t for t in required_types if t in created_types]) or "None"
+    missing_display = ", ".join(get_missing_types_for_user(user_id, cat_code)) or "None"
+    st.caption(f"Completed password types: {completed_display}")
+    st.caption(f"Remaining password types: {missing_display}")
 
     if pw_type in ["Emoji", "Hybrid"]:
         st.write("Click emojis to add to your password:")
@@ -407,6 +441,23 @@ if mode == "Create Password":
 
                     if duplicate:
                         st.error(f"This Participant ID has already created a {pw_type} password.")
+                        save_log({
+                            "timestamp": now_iso(),
+                            "user_id": user_id,
+                            "type": pw_type,
+                            "category": cat_code,
+                            "session_type": "",
+                            "event": "creation_failed",
+                            "reason": "duplicate_user_id_for_type",
+                            "password_length": len(password),
+                            "emoji_count": count_known_emojis(password),
+                            "creation_time": round(time.time() - st.session_state.creation_start_time, 3),
+                            "hash": "",
+                            "success": "",
+                            "login_time": "",
+                            "attempt_length": "",
+                            "attempt_number": "",
+                        })
                     else:
                         encoded = encode_password(password)
                         hashed = hash_password(encoded)
@@ -430,14 +481,23 @@ if mode == "Create Password":
                             "attempt_number": "",
                         })
 
-                        # auto switch to login, safely
                         st.session_state.creation_start_time = None
                         st.session_state.create_pending_clear = True
-                        st.session_state.pending_mode_switch = "Login Test"
-                        st.session_state.login_notice = (
-                            f"Password saved for {pw_type}. "
-                            f"Please now complete the Login Test using the same Participant ID and password type."
-                        )
+
+                        missing_types = get_missing_types_for_user(user_id, cat_code)
+
+                        if len(missing_types) == 0:
+                            st.session_state.pending_mode_switch = "Login Test"
+                            st.session_state.login_notice = (
+                                "All required password types have been created. "
+                                "Please now complete the Login Test."
+                            )
+                        else:
+                            st.session_state.create_notice = (
+                                "Password saved successfully. "
+                                f"You still need to create: {', '.join(missing_types)}."
+                            )
+
                         st.rerun()
 
 # =========================================================
@@ -462,7 +522,6 @@ if mode == "Login Test":
     pw_type = st.selectbox("Password Type", allowed_pw_types, key="pw_type_login")
     session_type = st.selectbox("Session Type", ["Immediate", "Delayed"], key="session_type_login")
 
-    # Type switch
     if pw_type != st.session_state.last_login_pw_type:
         st.session_state.login_password = ""
         st.session_state.login_widget_version += 1
@@ -470,11 +529,9 @@ if mode == "Login Test":
         st.session_state.login_start_time = None
         st.session_state.login_attempt_count = 0
 
-    # Timer
     if st.session_state.login_start_time is None:
         st.session_state.login_start_time = time.time()
 
-    # Pending clear
     if st.session_state.login_pending_clear:
         st.session_state.login_password = ""
         st.session_state.login_widget_version += 1
@@ -528,11 +585,45 @@ if mode == "Login Test":
             valid, message = validate_password_by_type(password, pw_type)
             if not valid:
                 st.error(message)
+                save_log({
+                    "timestamp": now_iso(),
+                    "user_id": user_id,
+                    "type": pw_type,
+                    "category": cat_code,
+                    "session_type": session_type,
+                    "event": "login_failed_validation",
+                    "reason": message,
+                    "password_length": "",
+                    "emoji_count": "",
+                    "creation_time": "",
+                    "hash": "",
+                    "success": False,
+                    "login_time": "",
+                    "attempt_length": len(password),
+                    "attempt_number": st.session_state.login_attempt_count + 1,
+                })
                 st.stop()
 
             record = get_created_record(user_id, pw_type)
             if record is None:
                 st.error("No created password found for this Participant ID and Password Type.")
+                save_log({
+                    "timestamp": now_iso(),
+                    "user_id": user_id,
+                    "type": pw_type,
+                    "category": cat_code,
+                    "session_type": session_type,
+                    "event": "login_failed_no_record",
+                    "reason": "no_created_password_found",
+                    "password_length": "",
+                    "emoji_count": "",
+                    "creation_time": "",
+                    "hash": "",
+                    "success": False,
+                    "login_time": "",
+                    "attempt_length": len(password),
+                    "attempt_number": st.session_state.login_attempt_count + 1,
+                })
                 st.stop()
 
             encoded = encode_password(password)
@@ -542,25 +633,25 @@ if mode == "Login Test":
             st.session_state.login_attempt_count += 1
             success = hashed == record["hash"]
 
-            save_log({
-                "timestamp": now_iso(),
-                "user_id": user_id,
-                "type": pw_type,
-                "category": cat_code,
-                "session_type": session_type,
-                "event": "login",
-                "reason": "",
-                "password_length": "",
-                "emoji_count": "",
-                "creation_time": "",
-                "hash": "",
-                "success": success,
-                "login_time": login_time,
-                "attempt_length": len(password),
-                "attempt_number": st.session_state.login_attempt_count,
-            })
-
             if success:
+                save_log({
+                    "timestamp": now_iso(),
+                    "user_id": user_id,
+                    "type": pw_type,
+                    "category": cat_code,
+                    "session_type": session_type,
+                    "event": "login",
+                    "reason": "",
+                    "password_length": "",
+                    "emoji_count": "",
+                    "creation_time": "",
+                    "hash": "",
+                    "success": True,
+                    "login_time": login_time,
+                    "attempt_length": len(password),
+                    "attempt_number": st.session_state.login_attempt_count,
+                })
+
                 st.session_state.login_start_time = None
                 st.session_state.login_attempt_count = 0
                 st.session_state.login_pending_clear = True
@@ -568,20 +659,51 @@ if mode == "Login Test":
                 st.rerun()
             else:
                 st.error("Login Failed")
+                save_log({
+                    "timestamp": now_iso(),
+                    "user_id": user_id,
+                    "type": pw_type,
+                    "category": cat_code,
+                    "session_type": session_type,
+                    "event": "login_failed_wrong_password",
+                    "reason": "hash_mismatch",
+                    "password_length": "",
+                    "emoji_count": "",
+                    "creation_time": "",
+                    "hash": "",
+                    "success": False,
+                    "login_time": login_time,
+                    "attempt_length": len(password),
+                    "attempt_number": st.session_state.login_attempt_count,
+                })
 
 # =========================================================
 # RESEARCHER CONTROLS
 # =========================================================
 st.divider()
 with st.expander("Researcher Controls"):
-    researcher_code = st.text_input("Enter researcher access code", type="password", key="researcher_access")
+    researcher_code = st.text_input(
+        "Enter researcher access code",
+        type="password",
+        key="researcher_access"
+    )
+
     if researcher_code == RESEARCHER_ACCESS_CODE:
         st.success("Researcher access granted.")
-        if st.button("Prepare Download"):
-            records = get_all_records_safe()
-            logs = pd.DataFrame(records)
-            if not logs.empty:
-                csv = logs.to_csv(index=False).encode("utf-8")
-                st.download_button("Click to Download logs.csv", csv, "logs.csv", "text/csv")
+
+        records = get_all_records_safe()
+        logs = pd.DataFrame(records)
+
+        if logs.empty:
+            st.info("No logs found yet.")
+        else:
+            csv = logs.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                label="Download logs.csv",
+                data=csv,
+                file_name="logs.csv",
+                mime="text/csv"
+            )
+
     elif researcher_code:
         st.error("Invalid access code.")

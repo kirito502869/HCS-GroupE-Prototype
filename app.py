@@ -13,7 +13,7 @@ from google.oauth2.service_account import Credentials
 RESEARCHER_ACCESS_CODE = "test2026"
 SHEET_NAME = "streamlit_logs"
 
-EMOJIS = ["😀", "😂", "🔥", "❤️", "😎", "👍", "🎉", "😢", "🚀", "🥶", "🤖", "👀", "💀", "🌙", "⭐", "🍕"]
+EMOJIS = ["😀", "😂", "🔥", "😊", "😎", "👍", "🎉", "😢", "🚀", "🥶", "🤖", "👀", "💀", "🌙", "⭐", "🍕"]
 
 CATEGORY_MAP = {
     "A": {"label": "A - Text + Emoji", "types": ["Text", "Emoji"]},

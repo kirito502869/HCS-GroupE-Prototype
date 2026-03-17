@@ -74,6 +74,10 @@ def now_iso():
     return datetime.now().isoformat()
 
 
+def normalize_user_id(user_id: str) -> str:
+    return user_id.strip().upper()
+
+
 def encode_password(pw: str) -> str:
     return "".join(format(ord(ch), "02x") for ch in pw)
 
@@ -154,7 +158,7 @@ def validate_password_by_type(password: str, pw_type: str):
 def get_category_from_user_id(user_id: str):
     if not user_id:
         return None
-    prefix = user_id.strip().upper()[:1]
+    prefix = normalize_user_id(user_id)[:1]
     return prefix if prefix in CATEGORY_MAP else None
 
 
@@ -203,6 +207,8 @@ def get_created_record(user_id: str, pw_type: str):
 # STATE
 # =========================================================
 DEFAULTS = {
+    "mode": "Create Password",
+
     "creation_start_time": None,
     "login_start_time": None,
 
@@ -255,6 +261,8 @@ st.write(
 )
 
 participant_id_for_category = st.text_input("Participant ID", key="participant_id_category")
+participant_id_for_category = normalize_user_id(participant_id_for_category)
+
 cat_code = get_category_from_user_id(participant_id_for_category)
 
 if cat_code is None:
@@ -266,7 +274,7 @@ allowed_pw_types = category_info["types"]
 
 st.info(f"You are in Category {cat_code}: {category_info['label']}")
 
-mode = st.radio("Select Mode", ["Create Password", "Login Test"])
+mode = st.radio("Select Mode", ["Create Password", "Login Test"], key="mode")
 
 if cat_code == "A":
     st.write("In this condition, you will create Text and Emoji passwords.")
@@ -281,7 +289,13 @@ else:
 if mode == "Create Password":
     st.subheader("Step 1 — Create Password")
 
-    user_id = st.text_input("Participant ID (confirm)", value=participant_id_for_category, key="create_user_id")
+    user_id = st.text_input(
+        "Participant ID (confirm)",
+        value=participant_id_for_category,
+        key="create_user_id"
+    )
+    user_id = normalize_user_id(user_id)
+
     detected_cat = get_category_from_user_id(user_id)
 
     if detected_cat != cat_code:
@@ -376,8 +390,9 @@ if mode == "Create Password":
                     records = get_all_records_safe()
                     duplicate = False
                     for r in records:
+                        existing_user_id = normalize_user_id(str(r.get("user_id", "")))
                         if (
-                            str(r.get("user_id", "")) == str(user_id)
+                            existing_user_id == str(user_id)
                             and r.get("type", "") == pw_type
                             and r.get("event", "") == "created"
                         ):
@@ -409,9 +424,15 @@ if mode == "Create Password":
                             "attempt_number": "",
                         })
 
+                        # 自动跳到登录测试
                         st.session_state.creation_start_time = None
                         st.session_state.create_pending_clear = True
-                        st.session_state.create_notice = "Password saved. Please proceed to Login Test after a short break."
+                        st.session_state.mode = "Login Test"
+                        st.session_state.login_notice = (
+                            f"Password saved for {pw_type}. "
+                            f"Please now complete the Login Test using the same Participant ID and password type."
+                        )
+                        st.session_state.pw_type_login = pw_type
                         st.rerun()
 
 # =========================================================
@@ -420,7 +441,13 @@ if mode == "Create Password":
 if mode == "Login Test":
     st.subheader("Step 2 — Login")
 
-    user_id = st.text_input("Participant ID (confirm)", value=participant_id_for_category, key="login_user_id")
+    user_id = st.text_input(
+        "Participant ID (confirm)",
+        value=participant_id_for_category,
+        key="login_user_id"
+    )
+    user_id = normalize_user_id(user_id)
+
     detected_cat = get_category_from_user_id(user_id)
 
     if detected_cat != cat_code:
@@ -532,7 +559,7 @@ if mode == "Login Test":
                 st.session_state.login_start_time = None
                 st.session_state.login_attempt_count = 0
                 st.session_state.login_pending_clear = True
-                st.session_state.login_notice = "Login Successful"
+                st.session_state.login_notice = "Login Successful. You may now continue to the questionnaire."
                 st.rerun()
             else:
                 st.error("Login Failed")

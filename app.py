@@ -60,12 +60,19 @@ sheet = get_sheet()
 
 
 def ensure_headers():
-    headers = sheet.row_values(1)
-    if not headers:
-        sheet.append_row(REQUIRED_HEADERS)
+    try:
+        headers = sheet.row_values(1)
+        if not headers:
+            sheet.append_row(REQUIRED_HEADERS)
+    except Exception:
+        # 避免 Google Sheets 临时错误让整个 app 直接崩掉
+        pass
 
 
-ensure_headers()
+# 每个会话只检查一次表头，避免每次 rerun 都请求 Google API
+if "headers_checked" not in st.session_state:
+    ensure_headers()
+    st.session_state.headers_checked = True
 
 # =========================================================
 # HELPERS
@@ -163,12 +170,8 @@ def get_category_from_user_id(user_id: str):
 
 
 def save_log(data: dict):
-    headers = sheet.row_values(1)
-    if not headers:
-        headers = REQUIRED_HEADERS
-        sheet.append_row(headers)
-
-    row = [data.get(col, "") for col in headers]
+    # 直接按固定表头写，不再每次请求 row_values(1)
+    row = [data.get(col, "") for col in REQUIRED_HEADERS]
     sheet.append_row(row)
 
 
@@ -300,6 +303,7 @@ if cat_code is None:
     st.warning("Please enter a valid Participant ID starting with A, B, or C (e.g. A10, B11, C12).")
     st.stop()
 
+user_id = participant_id_for_category
 category_info = CATEGORY_MAP[cat_code]
 allowed_pw_types = category_info["types"]
 
@@ -324,19 +328,7 @@ else:
 # =========================================================
 if mode == "Create Password":
     st.subheader("Step 1 — Create Password")
-
-    user_id = st.text_input(
-        "Participant ID (confirm)",
-        value=participant_id_for_category,
-        key="create_user_id"
-    )
-    user_id = normalize_user_id(user_id)
-
-    detected_cat = get_category_from_user_id(user_id)
-
-    if detected_cat != cat_code:
-        st.error("The Participant ID does not match the detected category.")
-        st.stop()
+    st.caption(f"Participant ID: {user_id}")
 
     pw_type = st.selectbox("Password Type", allowed_pw_types, key="pw_type_create")
 
@@ -505,19 +497,7 @@ if mode == "Create Password":
 # =========================================================
 if mode == "Login Test":
     st.subheader("Step 2 — Login")
-
-    user_id = st.text_input(
-        "Participant ID (confirm)",
-        value=participant_id_for_category,
-        key="login_user_id"
-    )
-    user_id = normalize_user_id(user_id)
-
-    detected_cat = get_category_from_user_id(user_id)
-
-    if detected_cat != cat_code:
-        st.error("The Participant ID does not match the detected category.")
-        st.stop()
+    st.caption(f"Participant ID: {user_id}")
 
     pw_type = st.selectbox("Password Type", allowed_pw_types, key="pw_type_login")
     session_type = st.selectbox("Session Type", ["Immediate", "Delayed"], key="session_type_login")

@@ -91,7 +91,7 @@ def parse_password_emojis(password: str):
     Greedy matching against known EMOJIS.
     Returns:
         matched: list of matched emojis
-        remainder: any non-emoji text left over
+        remainder: non-emoji text left over
     """
     emoji_list = sorted(EMOJIS, key=len, reverse=True)
     matched = []
@@ -208,6 +208,7 @@ def get_created_record(user_id: str, pw_type: str):
 # =========================================================
 DEFAULTS = {
     "mode": "Create Password",
+    "pending_mode_switch": "",
 
     "creation_start_time": None,
     "login_start_time": None,
@@ -273,6 +274,11 @@ category_info = CATEGORY_MAP[cat_code]
 allowed_pw_types = category_info["types"]
 
 st.info(f"You are in Category {cat_code}: {category_info['label']}")
+
+# mode switch BEFORE widget render
+if st.session_state.pending_mode_switch:
+    st.session_state.mode = st.session_state.pending_mode_switch
+    st.session_state.pending_mode_switch = ""
 
 mode = st.radio("Select Mode", ["Create Password", "Login Test"], key="mode")
 
@@ -424,15 +430,14 @@ if mode == "Create Password":
                             "attempt_number": "",
                         })
 
-                        # 自动跳到登录测试
+                        # auto switch to login, safely
                         st.session_state.creation_start_time = None
                         st.session_state.create_pending_clear = True
-                        st.session_state.mode = "Login Test"
+                        st.session_state.pending_mode_switch = "Login Test"
                         st.session_state.login_notice = (
                             f"Password saved for {pw_type}. "
                             f"Please now complete the Login Test using the same Participant ID and password type."
                         )
-                        st.session_state.pw_type_login = pw_type
                         st.rerun()
 
 # =========================================================

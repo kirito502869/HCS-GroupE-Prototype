@@ -7,9 +7,8 @@ import pandas as pd
 import streamlit as st
 from google.oauth2.service_account import Credentials
 
-# =========================================================
+
 # CONFIG
-# =========================================================
 RESEARCHER_ACCESS_CODE = "test2026"
 SHEET_NAME = "streamlit_logs"
 
@@ -21,9 +20,26 @@ CATEGORY_MAP = {
     "C": {"label": "C - Text + Emoji + Hybrid", "types": ["Text", "Emoji", "Hybrid"]},
 }
 
-# =========================================================
+REQUIRED_HEADERS = [
+    "timestamp",
+    "user_id",
+    "type",
+    "category",
+    "session_type",
+    "event",
+    "reason",
+    "password_length",
+    "emoji_count",
+    "creation_time",
+    "hash",
+    "success",
+    "login_time",
+    "attempt_length",
+    "attempt_number",
+]
+
+
 # GOOGLE SHEETS
-# =========================================================
 @st.cache_resource
 def get_sheet():
     scope = [
@@ -40,9 +56,17 @@ def get_sheet():
 
 sheet = get_sheet()
 
-# =========================================================
+
+def ensure_headers():
+    headers = sheet.row_values(1)
+    if not headers:
+        sheet.append_row(REQUIRED_HEADERS)
+
+
+ensure_headers()
+
+
 # HELPERS
-# =========================================================
 def now_iso():
     return datetime.now().isoformat()
 
@@ -55,30 +79,69 @@ def hash_password(encoded_pw: str) -> str:
     return hashlib.sha256(encoded_pw.encode()).hexdigest()
 
 
-def contains_emoji(pw: str) -> bool:
-    return any(c in EMOJIS for c in pw)
+def parse_password_emojis(password: str):
+    """
+    Greedy match against known emoji strings.
+    Returns:
+        matched_emojis: list[str]
+        remainder: str   # non-emoji characters left over
+    """
+    emoji_list = sorted(EMOJIS, key=len, reverse=True)
+    matched_emojis = []
+    remainder_parts = []
+
+    i = 0
+    while i < len(password):
+        matched = False
+        for e in emoji_list:
+            if password.startswith(e, i):
+                matched_emojis.append(e)
+                i += len(e)
+                matched = True
+                break
+        if not matched:
+            remainder_parts.append(password[i])
+            i += 1
+
+    return matched_emojis, "".join(remainder_parts)
 
 
-def contains_text(pw: str) -> bool:
-    return any(c not in EMOJIS for c in pw)
+def count_known_emojis(password: str) -> int:
+    matched, _ = parse_password_emojis(password)
+    return len(matched)
+
+
+def is_emoji_only_password(password: str) -> bool:
+    matched, remainder = parse_password_emojis(password)
+    return len(matched) > 0 and remainder == ""
+
+
+def has_any_known_emoji(password: str) -> bool:
+    matched, _ = parse_password_emojis(password)
+    return len(matched) > 0
+
+
+def has_any_text(password: str) -> bool:
+    _, remainder = parse_password_emojis(password)
+    return remainder != ""
 
 
 def validate_password_by_type(password: str, pw_type: str):
-    if not password:
+    if password == "":
         return False, "Password cannot be empty."
 
     if pw_type == "Text":
-        if contains_emoji(password):
+        if has_any_known_emoji(password):
             return False, "Text passwords cannot contain emojis."
         return True, ""
 
     if pw_type == "Emoji":
-        if contains_text(password):
+        if not is_emoji_only_password(password):
             return False, "Emoji passwords can only contain emojis."
         return True, ""
 
     if pw_type == "Hybrid":
-        if not contains_text(password) or not contains_emoji(password):
+        if not has_any_known_emoji(password) or not has_any_text(password):
             return False, "Hybrid passwords must contain both text and emojis."
         return True, ""
 
@@ -94,6 +157,10 @@ def get_category_from_user_id(user_id: str):
 
 def save_log(data: dict):
     headers = sheet.row_values(1)
+    if not headers:
+        headers = REQUIRED_HEADERS
+        sheet.append_row(headers)
+
     row = [data.get(col, "") for col in headers]
     sheet.append_row(row)
 
@@ -130,41 +197,25 @@ def get_created_record(user_id: str, pw_type: str):
     return filtered.iloc[-1]
 
 
-def count_emojis(password: str) -> int:
-    return sum(1 for c in password if c in EMOJIS)
-
-
-# =========================================================
-# SESSION STATE INIT
-# =========================================================
+# SESSION STATE
 DEFAULTS = {
-    # timers
     "creation_start_time": None,
     "login_start_time": None,
 
-    # canonical values
-    "create_password_value": "",
-    "login_password_value": "",
+    "create_input_widget": "",
+    "login_input_widget": "",
 
-    # widget versioning
-    "create_widget_version": 0,
-    "login_widget_version": 0,
-
-    # last selected type
     "last_create_pw_type": "",
     "last_login_pw_type": "",
 
-    # pending actions (processed BEFORE widget render)
     "create_pending_append": "",
     "login_pending_append": "",
     "create_pending_reset": False,
     "login_pending_reset": False,
 
-    # notices
     "create_notice": "",
     "login_notice": "",
 
-    # attempts
     "login_attempt_count": 0,
 }
 
@@ -172,9 +223,8 @@ for k, v in DEFAULTS.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
-# =========================================================
+
 # PAGE
-# =========================================================
 st.title("Emoji + Text Password Study Prototype")
 
 st.write(
@@ -203,9 +253,8 @@ elif cat_code == "B":
 else:
     st.write("In this condition, you will create Text, Emoji, and Hybrid passwords.")
 
-# =========================================================
-# CREATE PASSWORD MODE
-# =========================================================
+
+# CREATE MODE
 if mode == "Create Password":
     st.subheader("Step 1 — Create Password")
 
@@ -218,33 +267,27 @@ if mode == "Create Password":
 
     pw_type = st.selectbox("Password Type", allowed_pw_types, key="pw_type_create")
 
-    # start timer
     if st.session_state.creation_start_time is None:
         st.session_state.creation_start_time = time.time()
 
-    # type changed -> reset safely BEFORE widget render
+    # Handle type switch BEFORE widget render
     if pw_type != st.session_state.last_create_pw_type:
-        st.session_state.create_password_value = ""
-        st.session_state.create_widget_version += 1
+        st.session_state.create_input_widget = ""
         st.session_state.last_create_pw_type = pw_type
 
-    # process pending actions BEFORE widget render
+    # Handle pending actions BEFORE widget render
     if st.session_state.create_pending_reset:
-        st.session_state.create_password_value = ""
-        st.session_state.create_widget_version += 1
+        st.session_state.create_input_widget = ""
         st.session_state.create_pending_reset = False
 
     if st.session_state.create_pending_append:
-        st.session_state.create_password_value += st.session_state.create_pending_append
-        st.session_state.create_widget_version += 1
+        st.session_state.create_input_widget += st.session_state.create_pending_append
         st.session_state.create_pending_append = ""
 
-    # show notice once
     if st.session_state.create_notice:
         st.success(st.session_state.create_notice)
         st.session_state.create_notice = ""
 
-    # emoji buttons
     if pw_type in ["Emoji", "Hybrid"]:
         st.write("Click emojis to add to your password:")
         cols = st.columns(8)
@@ -254,27 +297,22 @@ if mode == "Create Password":
                     st.session_state.create_pending_append = emoji
                     st.rerun()
 
-    # widget key changes when we want a fresh widget
-    create_widget_key = f"create_password_widget_{st.session_state.create_widget_version}"
-
     if pw_type == "Emoji":
         st.text_input(
             "Password (Emoji only — typing disabled)",
-            value=st.session_state.create_password_value,
-            key=create_widget_key,
+            key="create_input_widget",
             type="password",
             disabled=True,
         )
+        password = st.session_state.create_input_widget
     else:
-        typed_value = st.text_input(
+        st.text_input(
             "Password (Type text or click emojis)",
-            value=st.session_state.create_password_value,
-            key=create_widget_key,
+            key="create_input_widget",
             type="password",
         )
-        st.session_state.create_password_value = typed_value
+        password = st.session_state.create_input_widget
 
-    # action buttons
     col1, col2 = st.columns(2)
 
     with col1:
@@ -284,9 +322,7 @@ if mode == "Create Password":
 
     with col2:
         if st.button("Save Password", key="save_create_password"):
-            password = st.session_state.create_password_value.strip()
-
-            if not user_id or not password:
+            if not user_id or password == "":
                 st.warning("Please fill all fields.")
             else:
                 valid, message = validate_password_by_type(password, pw_type)
@@ -302,7 +338,7 @@ if mode == "Create Password":
                         "event": "creation_failed",
                         "reason": message,
                         "password_length": len(password),
-                        "emoji_count": count_emojis(password),
+                        "emoji_count": count_known_emojis(password),
                         "creation_time": round(time.time() - st.session_state.creation_start_time, 3),
                         "hash": "",
                         "success": "",
@@ -313,6 +349,7 @@ if mode == "Create Password":
                 else:
                     records = get_all_records_safe()
                     duplicate = False
+
                     for r in records:
                         if (
                             str(r.get("user_id", "")) == str(user_id)
@@ -332,7 +369,7 @@ if mode == "Create Password":
                             "event": "creation_failed",
                             "reason": "duplicate_user_id_for_type",
                             "password_length": len(password),
-                            "emoji_count": count_emojis(password),
+                            "emoji_count": count_known_emojis(password),
                             "creation_time": round(time.time() - st.session_state.creation_start_time, 3),
                             "hash": "",
                             "success": "",
@@ -355,7 +392,7 @@ if mode == "Create Password":
                             "event": "created",
                             "reason": "",
                             "password_length": len(password),
-                            "emoji_count": count_emojis(password),
+                            "emoji_count": count_known_emojis(password),
                             "creation_time": creation_time,
                             "hash": hashed,
                             "success": "",
@@ -369,9 +406,8 @@ if mode == "Create Password":
                         st.session_state.create_notice = "Password saved. Please proceed to Login Test after a short break."
                         st.rerun()
 
-# =========================================================
-# LOGIN TEST MODE
-# =========================================================
+
+# LOGIN MODE
 if mode == "Login Test":
     st.subheader("Step 2 — Login")
 
@@ -385,33 +421,27 @@ if mode == "Login Test":
     pw_type = st.selectbox("Password Type", allowed_pw_types, key="pw_type_login")
     session_type = st.selectbox("Session Type", ["Immediate", "Delayed"], key="session_type_login")
 
-    # start timer
     if st.session_state.login_start_time is None:
         st.session_state.login_start_time = time.time()
 
-    # type changed -> reset safely BEFORE widget render
+    # Handle type switch BEFORE widget render
     if pw_type != st.session_state.last_login_pw_type:
-        st.session_state.login_password_value = ""
-        st.session_state.login_widget_version += 1
+        st.session_state.login_input_widget = ""
         st.session_state.last_login_pw_type = pw_type
 
-    # process pending actions BEFORE widget render
+    # Handle pending actions BEFORE widget render
     if st.session_state.login_pending_reset:
-        st.session_state.login_password_value = ""
-        st.session_state.login_widget_version += 1
+        st.session_state.login_input_widget = ""
         st.session_state.login_pending_reset = False
 
     if st.session_state.login_pending_append:
-        st.session_state.login_password_value += st.session_state.login_pending_append
-        st.session_state.login_widget_version += 1
+        st.session_state.login_input_widget += st.session_state.login_pending_append
         st.session_state.login_pending_append = ""
 
-    # show notice once
     if st.session_state.login_notice:
         st.success(st.session_state.login_notice)
         st.session_state.login_notice = ""
 
-    # emoji buttons
     if pw_type in ["Emoji", "Hybrid"]:
         st.write("Click emojis to add to your password:")
         cols = st.columns(8)
@@ -421,27 +451,22 @@ if mode == "Login Test":
                     st.session_state.login_pending_append = emoji
                     st.rerun()
 
-    # widget key changes when we want a fresh widget
-    login_widget_key = f"login_password_widget_{st.session_state.login_widget_version}"
-
     if pw_type == "Emoji":
         st.text_input(
             "Password (Emoji only — typing disabled)",
-            value=st.session_state.login_password_value,
-            key=login_widget_key,
+            key="login_input_widget",
             type="password",
             disabled=True,
         )
+        password = st.session_state.login_input_widget
     else:
-        typed_value = st.text_input(
+        st.text_input(
             "Password (Type text or click emojis)",
-            value=st.session_state.login_password_value,
-            key=login_widget_key,
+            key="login_input_widget",
             type="password",
         )
-        st.session_state.login_password_value = typed_value
+        password = st.session_state.login_input_widget
 
-    # action buttons
     col1, col2 = st.columns(2)
 
     with col1:
@@ -451,9 +476,7 @@ if mode == "Login Test":
 
     with col2:
         if st.button("Login", key="login_button"):
-            password = st.session_state.login_password_value.strip()
-
-            if not user_id or not password:
+            if not user_id or password == "":
                 st.warning("Please fill all fields.")
                 st.stop()
 
@@ -536,9 +559,8 @@ if mode == "Login Test":
             else:
                 st.error("Login Failed")
 
-# =========================================================
+
 # RESEARCHER CONTROLS
-# =========================================================
 st.divider()
 with st.expander("Researcher Controls"):
     researcher_code = st.text_input("Enter researcher access code", type="password", key="researcher_access")

@@ -7,9 +7,9 @@ import pandas as pd
 import streamlit as st
 from google.oauth2.service_account import Credentials
 
-# =========================================================
+
 # CONFIG
-# =========================================================
+
 RESEARCHER_ACCESS_CODE = "test2026"
 SHEET_NAME = "streamlit_logs"
 
@@ -39,9 +39,9 @@ REQUIRED_HEADERS = [
     "attempt_number",
 ]
 
-# =========================================================
+
 # GOOGLE SHEETS
-# =========================================================
+
 @st.cache_resource
 def get_sheet():
     scope = [
@@ -74,9 +74,9 @@ if "headers_checked" not in st.session_state:
     ensure_headers()
     st.session_state.headers_checked = True
 
-# =========================================================
+
 # HELPERS
-# =========================================================
+
 def now_iso():
     return datetime.now().isoformat()
 
@@ -236,9 +236,9 @@ def get_missing_types_for_user(user_id: str, cat_code: str):
     created_types = get_created_types_for_user(user_id)
     return sorted(list(required_types - created_types))
 
-# =========================================================
+
 # STATE
-# =========================================================
+
 DEFAULTS = {
     "mode": "Create Password",
     "pending_mode_switch": "",
@@ -268,9 +268,9 @@ for k, v in DEFAULTS.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
-# =========================================================
+
 # APPEND EMOJI HELPERS
-# =========================================================
+
 def append_create_emoji(emoji: str):
     current_key = f"create_text_v{st.session_state.create_widget_version}"
     current_text = st.session_state.get(current_key, st.session_state.create_password)
@@ -284,9 +284,9 @@ def append_login_emoji(emoji: str):
     st.session_state.login_password = current_text + emoji
     st.session_state.login_widget_version += 1
 
-# =========================================================
+
 # PAGE
-# =========================================================
+
 st.title("Emoji + Text Password Study Prototype")
 
 st.write(
@@ -323,9 +323,9 @@ elif cat_code == "B":
 else:
     st.write("In this condition, you will create Text, Emoji, and Hybrid passwords.")
 
-# =========================================================
+
 # CREATE MODE
-# =========================================================
+
 if mode == "Create Password":
     st.subheader("Step 1 — Create Password")
     st.caption(f"Participant ID: {user_id}")
@@ -492,9 +492,9 @@ if mode == "Create Password":
 
                         st.rerun()
 
-# =========================================================
+
 # LOGIN MODE
-# =========================================================
+
 if mode == "Login Test":
     st.subheader("Step 2 — Login")
     st.caption(f"Participant ID: {user_id}")
@@ -657,9 +657,9 @@ if mode == "Login Test":
                     "attempt_number": st.session_state.login_attempt_count,
                 })
 
-# =========================================================
+
 # RESEARCHER CONTROLS
-# =========================================================
+
 st.divider()
 with st.expander("Researcher Controls"):
     researcher_code = st.text_input(
